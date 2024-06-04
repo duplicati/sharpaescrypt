@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpAESCrypt", "src\SharpAESCrypt.csproj", "{6C506B87-ED2E-435D-91E7-80E36CC96BDA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unittest", "test\Unittest.csproj", "{92A56A7D-DAA1-4A2E-835A-CAB693B66E9D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6C506B87-ED2E-435D-91E7-80E36CC96BDA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C506B87-ED2E-435D-91E7-80E36CC96BDA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C506B87-ED2E-435D-91E7-80E36CC96BDA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C506B87-ED2E-435D-91E7-80E36CC96BDA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{92A56A7D-DAA1-4A2E-835A-CAB693B66E9D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{92A56A7D-DAA1-4A2E-835A-CAB693B66E9D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{92A56A7D-DAA1-4A2E-835A-CAB693B66E9D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{92A56A7D-DAA1-4A2E-835A-CAB693B66E9D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

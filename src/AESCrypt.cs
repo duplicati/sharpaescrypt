@@ -16,6 +16,32 @@ public static class AESCrypt
     public const byte DEFAULT_FILE_VERSION = 2;
 
     /// <summary>
+    /// Extracts the unencrypted, unverified extensions from the header.
+    /// Note that this advances the stream position, and it should be
+    /// reset to the beginning before decryption.
+    /// Since the header extensions are not encrypted, they can be obtained
+    /// without providing a password.
+    /// </summary>
+    /// <param name="stream">The stream to read from</param>
+    /// <returns>The extensions found in the header, if any</returns>
+    public static IEnumerable<KeyValuePair<string, byte[]>> ReadExtensions(Stream stream)
+        => DecryptingStreamInternal.ExtractExtensionsFromHeader(stream);
+
+    /// <summary>
+    /// Extracts the unencrypted, unverified extensions from the header.
+    /// Since the header extensions are not encrypted, they can be obtained
+    /// without providing a password.
+    /// </summary>
+    /// <param name="filename">The file to read from</param>
+    /// <returns>The extensions found in the header, if any</returns>
+    public static IEnumerable<KeyValuePair<string, byte[]>> ReadExtensions(string filename)
+    {
+        using (var fs = File.OpenRead(filename))
+            return ReadExtensions(fs);
+    }
+
+
+    /// <summary>
     /// Encrypts a stream using the supplied password
     /// </summary>
     /// <param name="password">The password to decrypt with</param>
@@ -79,8 +105,8 @@ public static class AESCrypt
     /// <param name="options">The encryption options to use</param>
     public static void Encrypt(string password, string inputfile, string outputfile, EncryptionOptions? options = default)
     {
-        using (FileStream infs = File.OpenRead(inputfile))
-        using (FileStream outfs = File.Create(outputfile))
+        using (var infs = File.OpenRead(inputfile))
+        using (var outfs = File.Create(outputfile))
             Encrypt(password, infs, outfs, options);
     }
 
@@ -94,8 +120,8 @@ public static class AESCrypt
     /// <param name="options">The encryption options to use</param>
     public static async Task EncryptAsync(string password, string inputfile, string outputfile, EncryptionOptions? options = default)
     {
-        using (FileStream infs = File.OpenRead(inputfile))
-        using (FileStream outfs = File.Create(outputfile))
+        using (var infs = File.OpenRead(inputfile))
+        using (var outfs = File.Create(outputfile))
             await EncryptAsync(password, infs, outfs, options);
     }
 
@@ -108,8 +134,8 @@ public static class AESCrypt
     /// <param name="options">The decryption options to use</param>
     public static void Decrypt(string password, string inputfile, string outputfile, DecryptionOptions? options = default)
     {
-        using (FileStream infs = File.OpenRead(inputfile))
-        using (FileStream outfs = File.Create(outputfile))
+        using (var infs = File.OpenRead(inputfile))
+        using (var outfs = File.Create(outputfile))
             Decrypt(password, infs, outfs, options);
     }
 
@@ -122,8 +148,8 @@ public static class AESCrypt
     /// <param name="options">The decryption options to use</param>
     public static async Task DecryptAsync(string password, string inputfile, string outputfile, DecryptionOptions? options = default)
     {
-        using (FileStream infs = File.OpenRead(inputfile))
-        using (FileStream outfs = File.Create(outputfile))
+        using (var infs = File.OpenRead(inputfile))
+        using (var outfs = File.Create(outputfile))
             await DecryptAsync(password, infs, outfs, options);
     }
 }

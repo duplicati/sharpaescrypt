@@ -214,13 +214,24 @@ internal partial class DecryptingStreamInternal
     );
 
     /// <summary>
-    /// Helper function to read and validate the header
+    /// Reads the extension values from the header, and attempts to rewind the stream
     /// </summary>
     /// <param name="stream">The stream to read from</param>
-    /// <param name="helper">The setup helper instance</param>
-    /// <param name="password">The password to use</param>
-    /// <param name="options">The decryption options to use</param>
-    private static HeaderData ReadEncryptionHeader(Stream stream, SetupHelper helper, string password, DecryptionOptions options)
+    /// <returns>The headers</returns>
+    public static List<KeyValuePair<string, byte[]>> ExtractExtensionsFromHeader(Stream stream)
+    {
+        (var version, var _) = ReadMagicAndVersion(stream);
+        return version >= 2
+            ? ReadExtensionsFromHeader(stream)
+            : new List<KeyValuePair<string, byte[]>>();
+    }
+
+    /// <summary>
+    /// Reads the magic header and version from the stream
+    /// </summary>
+    /// <param name="stream">The stream to read from</param>
+    /// <returns>The version and last block length</returns>
+    private static (byte Version, byte LastBlockLen) ReadMagicAndVersion(Stream stream)
     {
         var tmp = new byte[Constants.MAGIC_HEADER.Length + 2];
         try { stream.ReadExactly(tmp); }
@@ -243,32 +254,55 @@ internal partial class DecryptingStreamInternal
         else if (lastBlockLenByte != 0)
             throw new InvalidDataException($"Invalid reserved value in header: {lastBlockLenByte}");
 
+        return (version, lastBlockLenByte);
+    }
+
+    /// <summary>
+    /// Reads the extensions from the header
+    /// </summary>
+    /// <param name="stream">The stream to read the header from</param>
+    /// <returns>The list of extensions</returns>
+    private static List<KeyValuePair<string, byte[]>> ReadExtensionsFromHeader(Stream stream)
+    {
         var extensions = new List<KeyValuePair<string, byte[]>>();
-
-        //Extensions are only supported in v2+
-        if (version >= 2)
+        var buffer = new byte[ushort.MaxValue];
+        while (true)
         {
-            var buffer = new byte[ushort.MaxValue];
-            while (true)
-            {
-                stream.ReadExactly(buffer.AsSpan(0, 2));
-                var extensionLength = BinaryPrimitives.ReadUInt16BigEndian(buffer);
+            stream.ReadExactly(buffer.AsSpan(0, 2));
+            var extensionLength = BinaryPrimitives.ReadUInt16BigEndian(buffer);
 
-                // No more extensions
-                if (extensionLength == 0)
-                    break;
+            // No more extensions
+            if (extensionLength == 0)
+                break;
 
-                var dataspan = buffer.AsSpan(0, extensionLength);
-                stream.ReadExactly(dataspan);
-                var separatorIndex = dataspan.IndexOf((byte)0);
-                if (separatorIndex < 0)
-                    throw new InvalidDataException("Invalid extension data, missing separator");
+            var dataspan = buffer.AsSpan(0, extensionLength);
+            stream.ReadExactly(dataspan);
+            var separatorIndex = dataspan.IndexOf((byte)0);
+            if (separatorIndex < 0)
+                throw new InvalidDataException("Invalid extension data, missing separator");
 
-                var key = System.Text.Encoding.UTF8.GetString(dataspan.Slice(0, separatorIndex));
-                var value = dataspan.Slice(separatorIndex + 1).ToArray();
-                extensions.Add(new KeyValuePair<string, byte[]>(key, value));
-            }
+            var key = System.Text.Encoding.UTF8.GetString(dataspan.Slice(0, separatorIndex));
+            var value = dataspan.Slice(separatorIndex + 1).ToArray();
+            extensions.Add(new KeyValuePair<string, byte[]>(key, value));
         }
+
+        return extensions;
+    }
+
+    /// <summary>
+    /// Helper function to read and validate the header
+    /// </summary>
+    /// <param name="stream">The stream to read from</param>
+    /// <param name="helper">The setup helper instance</param>
+    /// <param name="password">The password to use</param>
+    /// <param name="options">The decryption options to use</param>
+    private static HeaderData ReadEncryptionHeader(Stream stream, SetupHelper helper, string password, DecryptionOptions options)
+    {
+        (var version, var lastBlockLenByte) = ReadMagicAndVersion(stream);
+
+        var extensions = version >= 2
+            ? ReadExtensionsFromHeader(stream)
+            : new List<KeyValuePair<string, byte[]>>();
 
         var headerIv = new byte[Constants.IV_SIZE];
         stream.ReadExactly(headerIv);

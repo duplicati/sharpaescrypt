@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Collections.Generic;
 
 namespace SharpAESCrypt.Unittest;
 
@@ -324,6 +325,28 @@ public class Test
 				a = c.Read(useBuf, 0, bufLen);
 				output.Write(useBuf, 0, a);
 			} while (a != 0);
+		}
+	}
+
+	[TestMethod]
+	public void TestReadHeader()
+	{
+		//Test each supported version
+		var opts = new EncryptionOptions()
+		{
+			AdditionalExtensions = [new KeyValuePair<string, byte[]>("t1", [7, 8])],
+			LeaveOpen = true
+		};
+
+		var data = new byte[] { 1, 2, 3, 4 };
+		using (var ms = new MemoryStream())
+		{
+			AESCrypt.Encrypt("password", new MemoryStream(data), ms, opts);
+			ms.Position = 0;
+			var header = AESCrypt.ReadExtensions(ms).ToArray();
+			var t1 = header.FirstOrDefault(h => h.Key == "t1");
+			if (t1.Key != "t1" || !t1.Value.SequenceEqual(new byte[] { 7, 8 }))
+				throw new Exception("Extension not found");
 		}
 	}
 }

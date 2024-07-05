@@ -144,7 +144,7 @@ internal class EncryptingStreamInternal
         //Basic input checks
         if (stream == null)
             throw new ArgumentNullException("stream");
-        if (password == null)
+        if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentNullException("password");
         if (!stream.CanWrite)
             throw new ArgumentException("The stream must be writeable", "stream");

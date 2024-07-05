@@ -446,10 +446,11 @@ public class Test
 		var opts = new EncryptionOptions()
 		{
 			AdditionalExtensions = [new KeyValuePair<string, byte[]>("t1", [7, 8])],
+			InsertPlaceholder = false,
 			LeaveOpen = true
 		};
 
-		var data = new byte[] { 1, 2, 3, 4 };
+		var data = new byte[1022];
 		using (var ms = new MemoryStream())
 		{
 			AESCrypt.Encrypt("password", new MemoryStream(data), ms, opts);
@@ -458,6 +459,13 @@ public class Test
 			var t1 = header.FirstOrDefault(h => h.Key == "t1");
 			if (t1.Key != "t1" || !t1.Value.SequenceEqual(new byte[] { 7, 8 }))
 				throw new Exception("Extension not found");
+
+			ms.Position = 0;
+			var targetms = new MemoryStream();
+			AESCrypt.Decrypt("password", ms, targetms, new DecryptionOptions(LeaveOpen: true));
+
+			if (!data.SequenceEqual(targetms.ToArray()))
+				throw new Exception("Data mismatch");
 		}
 	}
 }

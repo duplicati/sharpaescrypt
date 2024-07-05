@@ -65,7 +65,7 @@ public static class AESCrypt
     public static async Task EncryptAsync(string password, Stream input, Stream output, EncryptionOptions? options = default, CancellationToken ct = default)
     {
         using var c = new EncryptingStream(password, output, options);
-        await input.CopyToAsync(output, ct);
+        await input.CopyToAsync(c, ct);
         c.FlushFinalBlock();
     }
 
@@ -118,11 +118,12 @@ public static class AESCrypt
     /// <param name="outputfile">The encrypted output file</param>
     /// <param name="maxThreads">Maximum threads allowed for SharpAESCrypt. </param>
     /// <param name="options">The encryption options to use</param>
-    public static async Task EncryptAsync(string password, string inputfile, string outputfile, EncryptionOptions? options = default)
+    /// <param name="ct">The cancellation token to use</param>
+    public static async Task EncryptAsync(string password, string inputfile, string outputfile, EncryptionOptions? options = default, CancellationToken ct = default)
     {
         using (var infs = File.OpenRead(inputfile))
         using (var outfs = File.Create(outputfile))
-            await EncryptAsync(password, infs, outfs, options);
+            await EncryptAsync(password, infs, outfs, options, ct);
     }
 
     /// <summary>
@@ -146,10 +147,11 @@ public static class AESCrypt
     /// <param name="inputfile">The file with encrypted data</param>
     /// <param name="outputfile">The unencrypted output file</param>
     /// <param name="options">The decryption options to use</param>
-    public static async Task DecryptAsync(string password, string inputfile, string outputfile, DecryptionOptions? options = default)
+    /// <param name="ct">The cancellation token to use</param>
+    public static async Task DecryptAsync(string password, string inputfile, string outputfile, DecryptionOptions? options = default, CancellationToken ct = default)
     {
         using (var infs = File.OpenRead(inputfile))
         using (var outfs = File.Create(outputfile))
-            await DecryptAsync(password, infs, outfs, options);
+            await DecryptAsync(password, infs, outfs, options, ct);
     }
 }

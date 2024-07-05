@@ -16,7 +16,7 @@
 
   <PropertyGroup>
     <PackageId>SharpAESCrypt</PackageId>
-    <Version>2.0.1</Version>
+    <Version>2.0.2</Version>
 
     <Copyright>Copyright 2024, Kenneth Skovhede</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -25,7 +25,7 @@
     <PackageDescription>A C# implementation of the AESCrypt library</PackageDescription>
     <Authors>Kenneth Skovhede</Authors>
     <PackageTags>AES AESCrypt Crypto Encryption</PackageTags>
-    <PackageReleaseNotes>Added method to read headers without the password</PackageReleaseNotes>
+    <PackageReleaseNotes>Fixed writing bug in async interface. Added cancellation tokens.</PackageReleaseNotes>
     <PackageReadmeFile>docs\README.md</PackageReadmeFile>    
   </PropertyGroup>
 

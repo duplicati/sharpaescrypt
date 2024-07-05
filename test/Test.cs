@@ -43,6 +43,33 @@ public class Test
 	}
 
 	[TestMethod]
+	public void TestVersionsAsync()
+	{
+		var rnd = new Random();
+		var failed = 0;
+
+		//Test each supported version
+		for (var v = 0; v <= Constants.MAX_FILE_VERSION; v++)
+		{
+			var opts = new EncryptionOptions() { FileVersion = (byte)v };
+			// Test at boundaries and around the block/keysize margins
+			foreach (var bound in new int[] { 1 << 6, 1 << 8, 1 << 10, 1 << 12, 1 << 14, 1 << 16, 1 << 20 })
+				for (var i = Math.Max(0, bound - 6 * Constants.BLOCK_SIZE - 1); i <= bound + (6 * Constants.BLOCK_SIZE + 1); i++)
+					using (var ms = new MemoryStream())
+					{
+						var tmp = new byte[i];
+						rnd.NextBytes(tmp);
+						ms.Write(tmp.AsSpan(0));
+						if (!UnittestAsync($"Testing version {v} with length = {ms.Length} => ", ms, opts).Result)
+							failed++;
+					}
+		}
+
+		if (failed != 0)
+			throw new Exception($"Failed with {failed} tests");
+	}
+
+	[TestMethod]
 	public void TestNonSeekable()
 	{
 		var rnd = new Random();
@@ -278,6 +305,90 @@ public class Test
 						AESCrypt.Decrypt(new string(pwdchars), nenc, dec, new DecryptionOptions(LeaveOpen: true, MinVersion: encryptionOptions.FileVersion));
 					else
 						UnitStreamDecrypt(new string(pwdchars), nenc, dec, useRndBufSize);
+					throw new InvalidDataException("Mismatching HMAC not detected.");
+				}
+				catch (HashMismatchException)
+				{ }
+
+			}
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine("FAILED: " + ex.Message);
+			return false;
+		}
+
+		Console.WriteLine("OK!");
+		return true;
+	}
+
+	/// <summary>
+	/// Helper function to perform a single test.
+	/// </summary>
+	/// <param name="message">A message printed to the console</param>
+	/// <param name="input">The stream to test with</param>
+	/// <param name="useRndBufSize">Option to use varying buffer sizes for each call</param>
+	/// <param name="useNonSeekable">Flag to toggle use of a non-seekable stream</param>
+	/// <param name="encryptionOptions">The encryption options to use</param>
+	private static async Task<bool> UnittestAsync(string message, MemoryStream input, EncryptionOptions encryptionOptions)
+	{
+		Console.Write(message);
+
+		const string PASSWORD_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#¤%&/()=?`*'^¨-_.:,;<>|";
+		const int MIN_LEN = 1;
+		const int MAX_LEN = 25;
+
+		try
+		{
+			var rnd = new Random();
+			var pwdchars = new char[rnd.Next(MIN_LEN, MAX_LEN)];
+			for (int i = 0; i < pwdchars.Length; i++)
+				pwdchars[i] = PASSWORD_CHARS[rnd.Next(0, PASSWORD_CHARS.Length)];
+
+			input.Position = 0;
+
+			using (var enc = new MemoryStream())
+			using (var dec = new MemoryStream())
+			{
+				await AESCrypt.EncryptAsync(new string(pwdchars), input, enc, encryptionOptions with { LeaveOpen = true });
+
+				// 1st pass: test with wrong password if version > 0
+				enc.Position = 0;
+				try
+				{
+					if (encryptionOptions.FileVersion > 0)
+					{
+						await AESCrypt.DecryptAsync("!WRONG_PASSWORD!", enc, dec, new DecryptionOptions(LeaveOpen: true, MinVersion: encryptionOptions.FileVersion));
+						throw new InvalidOperationException("Wrong password not detected.");
+					}
+				}
+				catch (WrongPasswordException)
+				{ }
+
+
+				// 2nd Pass: data ok
+				enc.Position = 0;
+				await AESCrypt.DecryptAsync(new string(pwdchars), enc, dec, new DecryptionOptions(LeaveOpen: true, MinVersion: encryptionOptions.FileVersion));
+				dec.Position = 0;
+				input.Position = 0;
+
+				if (dec.Length != input.Length)
+					throw new Exception($"Length differ {dec.Length} vs {input.Length}");
+
+				for (int i = 0; i < dec.Length; i++)
+					if (dec.ReadByte() != input.ReadByte())
+						throw new Exception($"Streams differ at byte {i}");
+
+				// 3rd pass: Change hash at end of file, and expect HashMismatch
+				int changeHashAt = rnd.Next(Constants.HMAC_SIZE);
+				enc.Position = enc.Length - changeHashAt - 1;
+				int b = enc.ReadByte();
+				enc.Position = enc.Length - changeHashAt - 1;
+				enc.WriteByte((byte)(~b & 0xff));
+				enc.Position = 0;
+				try
+				{
+					await AESCrypt.DecryptAsync(new string(pwdchars), enc, dec, new DecryptionOptions(LeaveOpen: true, MinVersion: encryptionOptions.FileVersion));
 					throw new InvalidDataException("Mismatching HMAC not detected.");
 				}
 				catch (HashMismatchException)

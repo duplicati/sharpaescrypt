@@ -53,4 +53,18 @@ internal static class Constants
     /// </summary>
     /// <remarks>This number is required to be 8192 by the AESCrypt specification</remarks>
     internal const int KEY_HASH_ITERATIONS = 8192;
+
+    /// <summary>
+    /// The MAC address of the first network interface that has a MAC address.
+    /// </summary>
+    /// <remarks>If no such interface is found, a default MAC address is used (01:23:45:67:89:ab)</remarks>
+    internal static readonly ulong FIRST_MAC_ADDRESS = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
+    [
+        .. System.Net.NetworkInformation.NetworkInterface
+                    .GetAllNetworkInterfaces()
+                    .Select(ni => ni.GetPhysicalAddress().GetAddressBytes())
+                    .Where(mac => mac.Length > 0)
+                    .FirstOrDefault([0x01, 0x23, 0x45, 0x67, 0x89, 0xab]),
+        .. new byte[2],
+    ]);
 }

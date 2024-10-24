@@ -25,7 +25,7 @@
     <PackageDescription>A C# implementation of the AESCrypt library</PackageDescription>
     <Authors>Kenneth Skovhede</Authors>
     <PackageTags>AES AESCrypt Crypto Encryption</PackageTags>
-    <PackageReleaseNotes>Fixed writing bug in async interface. Added cancellation tokens.</PackageReleaseNotes>
+    <PackageReleaseNotes>Fixed a performance issue with creating the IV.</PackageReleaseNotes>
     <PackageReadmeFile>docs\README.md</PackageReadmeFile>    
   </PropertyGroup>
 

@@ -54,9 +54,6 @@ internal class SetupHelper : IDisposable
     /// <summary>
     /// Initialize the setup
     /// </summary>
-    /// <param name="mode">The mode to prepare for</param>
-    /// <param name="password">The password used to encrypt or decrypt</param>
-    /// <param name="iv">The IV used, set to null if encrypting</param>
     public SetupHelper()
     {
         m_crypt = (SymmetricAlgorithm)(CryptoConfig.CreateFromName(ENCRYPTION_ALGORITHM) ?? throw new SystemException($"No suitable {ENCRYPTION_ALGORITHM} implementation found"));
@@ -155,6 +152,7 @@ internal class SetupHelper : IDisposable
     /// This key is used to encrypt the bulk key and IV.
     /// </summary>
     /// <param name="password">The password supplied</param>
+    /// param name="iv1">The IV generated</param>
     /// <returns>The bulk key generated</returns>
     private ReadOnlyMemory<byte> GenerateHeaderKeyFromPasswordAndIV(byte[] password, ReadOnlyMemory<byte> iv1)
     {

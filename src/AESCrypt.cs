@@ -62,6 +62,7 @@ public static class AESCrypt
     /// <param name="input">The stream with unencrypted data</param>
     /// <param name="output">The encrypted output stream</param>
     /// <param name="options">The encryption options to use</param>
+    /// <param name="ct">The cancellation token to use</param>
     public static async Task EncryptAsync(string password, Stream input, Stream output, EncryptionOptions? options = default, CancellationToken ct = default)
     {
         using var c = new EncryptingStream(password, output, options);
@@ -89,6 +90,7 @@ public static class AESCrypt
     /// <param name="input">The stream with encrypted data</param>
     /// <param name="output">The unencrypted output stream</param>
     /// <param name="options">The decryption options to use</param>
+    /// <param name="ct">The cancellation token to use</param>
     public static async Task DecryptAsync(string password, Stream input, Stream output, DecryptionOptions? options = default, CancellationToken ct = default)
     {
         using var c = new DecryptingStream(password, input, options);
@@ -101,7 +103,6 @@ public static class AESCrypt
     /// <param name="password">The password to encrypt with</param>
     /// <param name="inputfile">The file with unencrypted data</param>
     /// <param name="outputfile">The encrypted output file</param>
-    /// <param name="maxThreads">Maximum threads allowed for SharpAESCrypt. </param>
     /// <param name="options">The encryption options to use</param>
     public static void Encrypt(string password, string inputfile, string outputfile, EncryptionOptions? options = default)
     {
@@ -116,7 +117,6 @@ public static class AESCrypt
     /// <param name="password">The password to encrypt with</param>
     /// <param name="inputfile">The file with unencrypted data</param>
     /// <param name="outputfile">The encrypted output file</param>
-    /// <param name="maxThreads">Maximum threads allowed for SharpAESCrypt. </param>
     /// <param name="options">The encryption options to use</param>
     /// <param name="ct">The cancellation token to use</param>
     public static async Task EncryptAsync(string password, string inputfile, string outputfile, EncryptionOptions? options = default, CancellationToken ct = default)

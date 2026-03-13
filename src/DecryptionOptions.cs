@@ -8,7 +8,7 @@ namespace SharpAESCrypt;
 /// <param name="IgnorePaddingBytes">Ignore padding byte values; this is for compatibility with the mainline client which uses random data for padding.</param>
 /// <param name="IgnoreFileLength">Ignore the file length; this is for recovery mode attempting to return the last block even if damaged.</param>
 public record DecryptionOptions(
-    int MinVersion = AESCrypt.DEFAULT_FILE_VERSION,
+    int MinVersion = AESCrypt.DEFAULT_MINIMUM_READ_VERSION,
     bool LeaveOpen = false,
     bool IgnorePaddingBytes = false,
     bool IgnoreFileLength = false

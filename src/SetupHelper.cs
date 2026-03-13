@@ -1,4 +1,3 @@
-using System.Text;
 using System.Security.Cryptography;
 using System.Buffers.Binary;
 
@@ -29,10 +28,9 @@ internal class SetupHelper : IDisposable
     private const string HMAC_ALGORITHM = "HmacSHA256";
 
     /// <summary>
-    /// The encoding scheme for the password.
-    /// A check is made when using the encoding, that it is indeed UTF-16LE.
+    /// The algorithm used for PBKDF2 in version 3
     /// </summary>
-    private const string PASSWORD_ENCODING = "utf-16le";
+    private static readonly HashAlgorithmName PBKDF2_HASH_ALGORITHM = HashAlgorithmName.SHA512;
 
     /// <summary>
     /// The encryption instance
@@ -76,26 +74,6 @@ internal class SetupHelper : IDisposable
     }
 
     /// <summary>
-    /// Generates the header key from the password and creates a random IV for the bulk key
-    /// </summary>
-    /// <param name="password">The password to use</param>
-    /// <returns>The header key</returns>
-    public HeaderEncryptionKey GenerateHeaderKeyAndIv(string password)
-    {
-        var iv = GenerateHeaderIV();
-        return new HeaderEncryptionKey(GenerateHeaderKeyFromPasswordAndIV(EncodePassword(password), iv), iv);
-    }
-
-    /// <summary>
-    /// Generates the header key from the password and the supplied IV
-    /// </summary>
-    /// <param name="password">The password to use</param>
-    /// <param name="iv">The IV to use</param>
-    /// <returns>The header key</returns>
-    public HeaderEncryptionKey GenerateHeaderKeyWithIv(string password, Memory<byte> iv)
-        => new HeaderEncryptionKey(GenerateHeaderKeyFromPasswordAndIV(EncodePassword(password), iv), iv);
-
-    /// <summary>
     /// Generates a bulk key and IV for encrypting data
     /// </summary>
     public BulkEncryptionKey GenerateBulkKey()
@@ -112,22 +90,27 @@ internal class SetupHelper : IDisposable
     }
 
     /// <summary>
-    /// Encodes the password in UTF-16LE and verifies that the encoding is correct.
+    /// Encodes the password according to the specified version
     /// </summary>
-    /// <param name="password">The password to encode as a byte array</param>
-    /// <returns>The password encoded as a byte array</returns>
-    private static byte[] EncodePassword(string password)
+    /// <param name="password">The password to encode</param>
+    /// <param name="fileVersion">The file version</param>
+    /// <returns>The encoded password</returns>
+    private static byte[] EncodePassword(string password, byte fileVersion)
     {
-        var e = Encoding.GetEncoding(PASSWORD_ENCODING);
+        // Gets the password encoding mode for the version
+        var encoding = fileVersion >= 3
+            ? System.Text.Encoding.UTF8
+            : System.Text.Encoding.Unicode; // Unicode is UTF-16LE
 
-        var preamb = e?.GetPreamble();
-        if (e == null || preamb == null || preamb.Length != 2)
-            throw new SystemException($"The required encoding, {PASSWORD_ENCODING}, is not supported on this system");
+        // Legacy safeguard: verify UTF-16LE preamble (was needed under Mono)
+        if (fileVersion <= 2)
+        {
+            var preamb = encoding.GetPreamble();
+            if (preamb == null || preamb.Length != 2 || preamb[0] != 0xff || preamb[1] != 0xfe)
+                throw new SystemException($"The required encoding, UTF-16LE, is not supported on this system");
+        }
 
-        if (preamb[0] == 0xff && preamb[1] == 0xfe)
-            return e.GetBytes(password);
-        else
-            throw new SystemException($"The required encoding, {PASSWORD_ENCODING}, is not supported on this system (looks like UTF-16BE)");
+        return encoding.GetBytes(password);
     }
 
     /// <summary>
@@ -148,49 +131,134 @@ internal class SetupHelper : IDisposable
     }
 
     /// <summary>
-    /// Generates a key based on the IV and the password.
-    /// This key is used to encrypt the bulk key and IV.
+    /// Generates a random header key from the password and a new IV.
     /// </summary>
-    /// <param name="password">The password supplied</param>
-    /// param name="iv1">The IV generated</param>
-    /// <returns>The bulk key generated</returns>
-    private ReadOnlyMemory<byte> GenerateHeaderKeyFromPasswordAndIV(byte[] password, ReadOnlyMemory<byte> iv1)
+    /// <param name="password">The password to use</param>
+    /// <param name="version">The file version</param>
+    /// <param name="iterations">The number of iterations to use for PBKDF2, or null if not using version 3+</param>
+    /// <returns>The header key</returns>
+    public HeaderEncryptionKey GenerateHeaderKeyAndIv(string password, byte version, int? iterations)
+        => GenerateHeaderKey(password, GenerateHeaderIV(), version, iterations);
+
+    /// <summary>
+    /// Generates the header key from the password and IV.
+    /// </summary>
+    /// <param name="password">The password to use</param>
+    /// <param name="iv">The IV to use</param>
+    /// <param name="version">The file version</param>
+    /// <param name="iterations">The number of iterations to use for PBKDF2, or null if not using version 3+</param>
+    /// <returns>The header key</returns>
+    public HeaderEncryptionKey GenerateHeaderKey(string password, ReadOnlyMemory<byte> iv, byte version, int? iterations)
+        => version >= 3
+            ? GenerateHeaderKeyUsingPBKDF2(password, iv, iterations ?? throw new ArgumentNullException(nameof(iterations)))
+            : GenerateHeaderKeyUsingCustomKDF(password, iv, version);
+
+    /// <summary>
+    /// Generates the header key from the password and the supplied IV
+    /// </summary>
+    /// <param name="password">The password to use</param>
+    /// <param name="iv">The IV to use</param>
+    /// <param name="version">The file version</param>
+    /// <returns>The header key</returns>
+    private HeaderEncryptionKey GenerateHeaderKeyUsingCustomKDF(string password, ReadOnlyMemory<byte> iv, byte version)
     {
+        var derivedPassword = EncodePassword(password, version);
         var key = new byte[Constants.KEY_SIZE];
-        iv1.CopyTo(key);
-
-        for (int i = 0; i < Constants.KEY_HASH_ITERATIONS; i++)
+        try
         {
-            m_hash.Initialize();
-            m_hash.TransformBlock(key, 0, key.Length, key, 0);
-            m_hash.TransformFinalBlock(password, 0, password.Length);
-            key = m_hash.Hash ?? throw new CryptographicException("Unexpected missing hash value");
-        }
+            iv.CopyTo(key);
 
-        return key;
+            for (int i = 0; i < Constants.KEY_HASH_ITERATIONS; i++)
+            {
+                m_hash.Initialize();
+                m_hash.TransformBlock(key, 0, key.Length, key, 0);
+                m_hash.TransformFinalBlock(derivedPassword, 0, derivedPassword.Length);
+                var hash = m_hash.Hash ?? throw new CryptographicException("Unexpected missing hash value");
+                hash.CopyTo(key.AsSpan());
+                CryptographicOperations.ZeroMemory(hash);
+            }
+
+            return new HeaderEncryptionKey(key, iv);
+        }
+        catch
+        {
+            // If something fails, clear the key as it is not returned
+            CryptographicOperations.ZeroMemory(key);
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(derivedPassword);
+        }
+    }
+
+    /// <summary>
+    /// Generates the header key from the password and IV using PBKDF2 (for version 3+).
+    /// This uses HMAC-SHA512 as the PRF.
+    /// </summary>
+    /// <param name="password">The password to use</param>
+    /// <param name="iv">The IV (salt) to use</param>
+    /// <param name="iterations">The number of PBKDF2 iterations</param>
+    /// <returns>The header key</returns>
+    private HeaderEncryptionKey GenerateHeaderKeyUsingPBKDF2(string password, ReadOnlyMemory<byte> iv, int iterations)
+    {
+        if (iterations < Constants.KDF_MIN_ITERATIONS || iterations > Constants.KDF_MAX_ITERATIONS)
+            throw new ArgumentOutOfRangeException(nameof(iterations), $"PBKDF2 iterations must be between {Constants.KDF_MIN_ITERATIONS} and {Constants.KDF_MAX_ITERATIONS}");
+
+        var encodedPassword = EncodePassword(password, 3);
+        var ivArray = iv.ToArray();
+        try
+        {
+            using var pbkdf2 = new Rfc2898DeriveBytes(encodedPassword, ivArray, iterations, PBKDF2_HASH_ALGORITHM);
+            return new HeaderEncryptionKey(pbkdf2.GetBytes(Constants.KEY_SIZE), iv);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encodedPassword);
+            CryptographicOperations.ZeroMemory(ivArray);
+        }
     }
 
     /// <summary>
     /// Encrypts the key and IV used to encrypt data, using the initial key and IV.
     /// </summary>
+    /// <param name="headerKey">The header encryption key</param>
+    /// <param name="bulkKey">The bulk encryption key</param>
+    /// <param name="version">The file version</param>
     /// <returns>The encrypted AES Key (including IV) and HMAC</returns>
-    public ReadOnlySpan<byte> EncryptBulkAESKeyWithHMAC(HeaderEncryptionKey headerKey, BulkEncryptionKey bulkKey)
+    public ReadOnlySpan<byte> EncryptBulkAESKeyWithHMAC(HeaderEncryptionKey headerKey, BulkEncryptionKey bulkKey, byte version)
     {
-        using var ms = new MemoryStream();
-        using var cs = new CryptoStream(ms, m_crypt.CreateEncryptor(headerKey.Key.ToArray(), headerKey.IV.ToArray()), CryptoStreamMode.Write);
-        cs.Write(bulkKey.IV.Span);
-        cs.Write(bulkKey.Key.Span);
-        cs.FlushFinalBlock();
+        var keyBytes = headerKey.Key.ToArray();
+        var ivBytes = headerKey.IV.ToArray();
+        try
+        {
+            using var ms = new MemoryStream();
+            using var cs = new CryptoStream(ms, m_crypt.CreateEncryptor(keyBytes, ivBytes), CryptoStreamMode.Write);
+            cs.Write(bulkKey.IV.Span);
+            cs.Write(bulkKey.Key.Span);
+            cs.FlushFinalBlock();
 
-        var encryptedKey = ms.ToArray();
+            var encryptedKey = ms.ToArray();
 
-        m_hmac.Initialize();
-        m_hmac.Key = headerKey.Key.ToArray();
-        m_hmac.TransformFinalBlock(encryptedKey, 0, encryptedKey.Length);
+            m_hmac.Initialize();
+            m_hmac.Key = keyBytes;
+            m_hmac.TransformBlock(encryptedKey, 0, encryptedKey.Length, null, 0);
 
-        ms.Write(m_hmac.Hash ?? throw new CryptographicException("Unexpected missing hash value"));
+            // For version 3+, include the version byte in the HMAC calculation
+            if (version >= 3)
+                m_hmac.TransformFinalBlock([version], 0, 1);
+            else
+                m_hmac.TransformFinalBlock([], 0, 0);
 
-        return ms.ToArray();
+            ms.Write(m_hmac.Hash ?? throw new CryptographicException("Unexpected missing hash value"));
+
+            return ms.ToArray();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(keyBytes);
+            CryptographicOperations.ZeroMemory(ivBytes);
+        }
     }
 
     /// <summary>
@@ -251,29 +319,47 @@ internal class SetupHelper : IDisposable
     /// </summary>
     /// <param name="data">The encrypted IV followed by the key</param>
     /// <param name="headerKey">The header key used to decrypt the bulk key</param>
+    /// <param name="version">The file version</param>
     /// <returns>The bulk encryption key</returns>
-    public BulkEncryptionKey DecryptBulkEncryptionKeyAndVerifyHMAC(byte[] data, HeaderEncryptionKey headerKey)
+    public BulkEncryptionKey DecryptBulkEncryptionKeyAndVerifyHMAC(byte[] data, HeaderEncryptionKey headerKey, byte version)
     {
-        m_hmac.Initialize();
-        m_hmac.Key = headerKey.Key.ToArray();
-        m_hmac.TransformFinalBlock(data, 0, Constants.IV_SIZE + Constants.KEY_SIZE);
-        var calculatedhmac = m_hmac.Hash ?? throw new CryptographicException("Unexpected missing hash value");
-        var hmac = data.AsSpan(Constants.IV_SIZE + Constants.KEY_SIZE);
-        if (!hmac.SequenceEqual(calculatedhmac))
-            throw new WrongPasswordException("Invalid password or corrupted data");
+        var keyBytes = headerKey.Key.ToArray();
+        var ivBytes = headerKey.IV.ToArray();
+        try
+        {
+            m_hmac.Initialize();
+            m_hmac.Key = keyBytes;
+            m_hmac.TransformBlock(data, 0, Constants.IV_SIZE + Constants.KEY_SIZE, null, 0);
 
-        var buffer = new byte[Constants.IV_SIZE + Constants.KEY_SIZE];
-        using (var ms = new MemoryStream(data))
-        using (var cs = new CryptoStream(ms, m_crypt.CreateDecryptor(headerKey.Key.ToArray(), headerKey.IV.ToArray()), CryptoStreamMode.Read))
-            cs.ReadExactly(buffer);
+            // For version 3+, include the version byte in the HMAC calculation
+            if (version >= 3)
+                m_hmac.TransformFinalBlock([version], 0, 1);
+            else
+                m_hmac.TransformFinalBlock([], 0, 0);
 
-        return new BulkEncryptionKey(
-            buffer.AsMemory(Constants.IV_SIZE),
-            buffer.AsMemory(0, Constants.IV_SIZE));
+            var calculatedhmac = m_hmac.Hash ?? throw new CryptographicException("Unexpected missing hash value");
+            var hmac = data.AsSpan(Constants.IV_SIZE + Constants.KEY_SIZE);
+            if (!CryptographicOperations.FixedTimeEquals(hmac, calculatedhmac))
+                throw new WrongPasswordException("Invalid password or corrupted data");
+
+            var buffer = new byte[Constants.IV_SIZE + Constants.KEY_SIZE];
+            using (var ms = new MemoryStream(data))
+            using (var cs = new CryptoStream(ms, m_crypt.CreateDecryptor(keyBytes, ivBytes), CryptoStreamMode.Read))
+                cs.ReadExactly(buffer);
+
+            return new BulkEncryptionKey(
+                buffer.AsMemory(Constants.IV_SIZE),
+                buffer.AsMemory(0, Constants.IV_SIZE));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(keyBytes);
+            CryptographicOperations.ZeroMemory(ivBytes);
+        }
     }
 
     /// <summary>
-    /// Disposes all members 
+    /// Disposes all members
     /// </summary>
     public void Dispose()
     {

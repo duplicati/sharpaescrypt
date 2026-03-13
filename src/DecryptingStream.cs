@@ -139,6 +139,11 @@ internal partial class DecryptingStreamInternal
     public byte Version { get; init; }
 
     /// <summary>
+    /// The number of iterations used for the key derivation function, if using v3+.
+    /// </summary>
+    public int? KdfIterations { get; init; }
+
+    /// <summary>
     /// The length of the data read so far
     /// </summary>
     public long Length => m_length;
@@ -177,16 +182,19 @@ internal partial class DecryptingStreamInternal
         using var helper = new SetupHelper();
 
         //Read and validate
-        (var headerKey, var bulkKey, var version, var extensions, m_lastBlockLen) = ReadEncryptionHeader(stream, helper, password, options);
+        (var headerKey, var bulkKey, var version, var extensions, m_lastBlockLen, var kdfIterations) = ReadEncryptionHeader(stream, helper, password, options);
 
         // Set up properties based on the header
         Version = version;
         Extensions = extensions;
+        KdfIterations = kdfIterations;
         if (Version < options.MinVersion)
             throw new InvalidDataException($"File version was {Version} but minimum allowed version is {options.MinVersion}");
 
         // Preserve the last block for special handling of padding, and the HMAC
-        m_reservedBytes = Constants.BLOCK_SIZE + Constants.HMAC_SIZE + (version >= 1 ? 1 : 0);
+        // The version logic accounts for v0 not having the last block length byte
+        // and v3+ using PKCS#7 padding instead of the last block length byte
+        m_reservedBytes = Constants.BLOCK_SIZE + Constants.HMAC_SIZE + (version >= 1 && version <= 2 ? 1 : 0);
         m_ignorePaddingBytes = options.IgnorePaddingBytes;
         m_ignoreFileLength = options.IgnoreFileLength;
 
@@ -205,12 +213,14 @@ internal partial class DecryptingStreamInternal
     /// <param name="Version">The file version</param>
     /// <param name="Extensions">The list of extensions</param>
     /// <param name="LastBlockLen">The last block length</param>
+    /// <param name="KdfIterations">The number of PBKDF2 iterations</param>
     private record HeaderData(
         HeaderEncryptionKey HeaderKey,
         BulkEncryptionKey BulkKey,
         byte Version,
         List<KeyValuePair<string, byte[]>> Extensions,
-        byte LastBlockLen
+        byte LastBlockLen,
+        int? KdfIterations
     );
 
     /// <summary>
@@ -304,10 +314,22 @@ internal partial class DecryptingStreamInternal
             ? ReadExtensionsFromHeader(stream)
             : new List<KeyValuePair<string, byte[]>>();
 
+        // For version 3+, read the KDF iteration count
+        int? kdfIterations = null;
+        if (version >= 3)
+        {
+            var kdfIterationsBytes = new byte[4];
+            stream.ReadExactly(kdfIterationsBytes);
+            kdfIterations = BinaryPrimitives.ReadInt32BigEndian(kdfIterationsBytes);
+            if (kdfIterations < Constants.KDF_MIN_ITERATIONS || kdfIterations > Constants.KDF_MAX_ITERATIONS)
+                throw new InvalidDataException($"Invalid KDF iteration count: {kdfIterations}");
+        }
+
         var headerIv = new byte[Constants.IV_SIZE];
         stream.ReadExactly(headerIv);
 
-        var headerKey = helper.GenerateHeaderKeyWithIv(password, headerIv);
+        // Create the header key from the password and IV
+        var headerKey = helper.GenerateHeaderKey(password, headerIv, version, kdfIterations);
 
         BulkEncryptionKey bulkKey;
         if (version >= 1)
@@ -315,14 +337,14 @@ internal partial class DecryptingStreamInternal
             var bulkKeyAndHmac = new byte[Constants.IV_SIZE + Constants.KEY_SIZE + Constants.HMAC_SIZE];
             stream.ReadExactly(bulkKeyAndHmac);
 
-            bulkKey = helper.DecryptBulkEncryptionKeyAndVerifyHMAC(bulkKeyAndHmac, headerKey);
+            bulkKey = helper.DecryptBulkEncryptionKeyAndVerifyHMAC(bulkKeyAndHmac, headerKey, version);
         }
         else
         {
             bulkKey = new BulkEncryptionKey(headerKey.Key, headerKey.IV);
         }
 
-        return new HeaderData(headerKey, bulkKey, version, extensions, lastBlockLenByte);
+        return new HeaderData(headerKey, bulkKey, version, extensions, lastBlockLenByte, kdfIterations);
     }
 
     /// <summary>
@@ -409,7 +431,8 @@ internal partial class DecryptingStreamInternal
             m_hasReadFooter = true;
 
             // Special case for zero-byte cleartext, no padding, not conforming to PCKS7
-            if (m_blockBuffer.Length < m_reservedBytes)
+            // v3+ always writes a PKCS#7 padding block, so this case doesn't apply
+            if (m_blockBuffer.Length < m_reservedBytes && Version < 3)
             {
                 m_cryptoTransform.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
                 m_hmac.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
@@ -426,29 +449,61 @@ internal partial class DecryptingStreamInternal
                 m_cryptoTransform.TransformBlock(m_blockBuffer.Array, m_blockBuffer.Offset, Constants.BLOCK_SIZE, m_blockBuffer.Array, m_blockBuffer.Offset);
                 m_cryptoTransform.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
 
-                // NOTE: In any version, the last block length is not covered by the HMAC.
-                // This means an attacker can modify the last block length, but not the content.
-                // The check here is incompatible with the mainline client, but is harder to manipulate.
-                // An attacker can still expand the file by up to 15 bytes, but not shorten it.                
                 var decrypted = m_blockBuffer.Consume(Constants.BLOCK_SIZE);
-                var trailBytes = Version == 0
-                    ? m_lastBlockLen
-                    : m_blockBuffer.Consume(1)[0];
 
-                if (!m_ignoreFileLength && trailBytes >= Constants.BLOCK_SIZE)
-                    throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding length");
-
-                trailBytes = (byte)(trailBytes % Constants.BLOCK_SIZE);
-
-                m_length += trailBytes;
-                m_extraDecryptedBytes.Append(decrypted.Slice(0, trailBytes == 0 ? Constants.BLOCK_SIZE : trailBytes));
-
-                if (trailBytes != 0 && !m_ignorePaddingBytes)
+                // Figure out how long the last block is, which is version specific
+                if (Version >= 3)
                 {
-                    var paddingByte = (byte)(Constants.BLOCK_SIZE - trailBytes);
-                    var paddingData = decrypted.Slice(trailBytes);
-                    if (paddingData.ContainsAnyExcept(paddingByte))
-                        throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding bytes");
+                    // For v3 we use PKCS#7 padding
+                    var paddingByte = decrypted[Constants.BLOCK_SIZE - 1];
+                    if (!m_ignoreFileLength && (paddingByte == 0 || paddingByte > Constants.BLOCK_SIZE))
+                        throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding length");
+
+                    // trailBytes == 0 means the entire block is padding (block-aligned plaintext) 
+                    // and no extra data will be added from this block
+                    var trailBytes = (byte)(Constants.BLOCK_SIZE - paddingByte);
+
+                    if (!m_ignorePaddingBytes)
+                    {
+                        var paddingData = decrypted.Slice(trailBytes);
+                        if (paddingData.ContainsAnyExcept(paddingByte))
+                            throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding bytes");
+                    }
+
+                    m_extraDecryptedBytes.Append(decrypted.Slice(0, trailBytes));
+                }
+                else if (Version >= 1) //v1+v2
+                {
+                    // The length is the last byte of the last block, before the trailing HMAC
+                    var trailBytes = m_blockBuffer.Consume(1)[0];
+
+                    if (!m_ignoreFileLength && trailBytes >= Constants.BLOCK_SIZE)
+                        throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding length");
+
+                    trailBytes = (byte)(trailBytes % Constants.BLOCK_SIZE);
+                    m_extraDecryptedBytes.Append(decrypted.Slice(0, trailBytes == 0 ? Constants.BLOCK_SIZE : trailBytes));
+
+                    // NOTE: In v1+v2, the last block length is not covered by the HMAC.
+                    // This means an attacker can modify the last block length, but not the content.
+                    // The check here is incompatible with the mainline client, but is harder to manipulate.
+                    // An attacker can still expand the file by up to 15 bytes, but not shorten it.                
+                    if (trailBytes != 0 && !m_ignorePaddingBytes)
+                    {
+                        var paddingByte = (byte)(Constants.BLOCK_SIZE - trailBytes);
+                        var paddingData = decrypted.Slice(trailBytes);
+                        if (paddingData.ContainsAnyExcept(paddingByte))
+                            throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding bytes");
+                    }
+                }
+                else //v0
+                {
+                    // Length is in the header
+                    var trailBytes = m_lastBlockLen;
+
+                    if (!m_ignoreFileLength && trailBytes >= Constants.BLOCK_SIZE)
+                        throw new HashMismatchException("Content has been tampered with, do not trust content: invalid padding length");
+
+                    m_extraDecryptedBytes.Append(decrypted.Slice(0, trailBytes == 0 ? Constants.BLOCK_SIZE : trailBytes));
                 }
             }
 
@@ -464,7 +519,7 @@ internal partial class DecryptingStreamInternal
             // Verify the HMAC
             var hmacCalculated = m_hmac.Hash ?? throw new HashMismatchException("Unexpected missing hash value");
             var hmacRead = m_blockBuffer.Consume(Constants.HMAC_SIZE);
-            if (!hmacCalculated.AsSpan().SequenceEqual(hmacRead))
+            if (!CryptographicOperations.FixedTimeEquals(hmacCalculated, hmacRead))
                 throw new HashMismatchException("Content has been tampered with, do not trust content: invalid HMAC");
 
             m_hmac.Dispose();

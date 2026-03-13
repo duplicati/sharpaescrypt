@@ -150,11 +150,16 @@ internal class EncryptingStreamInternal
             throw new ArgumentException("The stream must be writeable", "stream");
 
         options ??= EncryptionOptions.Default;
+        if (options.FileVersion < Constants.MIN_FILE_VERSION || options.FileVersion > Constants.MAX_FILE_VERSION)
+            throw new ArgumentOutOfRangeException(nameof(options.FileVersion), $"FileVersion must be between {Constants.MIN_FILE_VERSION} and {Constants.MAX_FILE_VERSION}");
+        if (options.FileVersion >= 3 && (options.KdfIterations < Constants.KDF_MIN_ITERATIONS || options.KdfIterations > Constants.KDF_MAX_ITERATIONS))
+            throw new ArgumentOutOfRangeException(nameof(options.KdfIterations), $"KdfIterations must be between {Constants.KDF_MIN_ITERATIONS} and {Constants.KDF_MAX_ITERATIONS}");
+
         m_version = options.FileVersion;
         using var helper = new SetupHelper();
 
-        // Create the Key using the password and generate a random IV
-        var headerKey = helper.GenerateHeaderKeyAndIv(password);
+        // Create the header key from the password and a random IV
+        var headerKey = helper.GenerateHeaderKeyAndIv(password, options.FileVersion, options.FileVersion >= 3 ? options.KdfIterations : null);
 
         // v0 files use the header key directly for bulk encryption
         // Not recommended, not default, but supported for compatibility
@@ -207,10 +212,18 @@ internal class EncryptingStreamInternal
             stream.Write([0, 0]); //No more extensions
         }
 
+        // For version 3+, write the KDF iteration count (4 bytes, network byte order)
+        if (options.FileVersion >= 3)
+        {
+            var kdfIterationsBytes = new byte[4];
+            BinaryPrimitives.WriteInt32BigEndian(kdfIterationsBytes, options.KdfIterations);
+            stream.Write(kdfIterationsBytes);
+        }
+
         stream.Write(headerKey.IV.Span);
 
         if (options.FileVersion != 0)
-            stream.Write(helper.EncryptBulkAESKeyWithHMAC(headerKey, bulkEncryptionKey));
+            stream.Write(helper.EncryptBulkAESKeyWithHMAC(headerKey, bulkEncryptionKey, options.FileVersion));
     }
 
     /// <summary>
@@ -306,12 +319,19 @@ internal class EncryptingStreamInternal
             m_hasFlushedFinalBlock = true;
             var lastBlockLen = (byte)(m_blockBuffer.Length % Constants.BLOCK_SIZE);
 
-            //Apply PaddingMode.PKCS7 manually, but without a padding block for empty last block
-            if (lastBlockLen > 0)
+            // For v3+ we use standard PKCS#7 padding.
+            // For v0-v2 we use a custom padding scheme, that is mostly PCKS#7,
+            // but does not write an empty padding block for empty last block,
+            // and instead always writes the last block size in the output
+
+            //Apply PaddingMode.PKCS7 manually, but without a padding block for empty last block for v0-v2
+            if (lastBlockLen > 0 || m_version >= 3)
             {
                 // Pad the last block, we are guaranteed to have space for the block, 
                 // as we fill the block with padding and the buffer is a multiple of the block size
                 var padding = new byte[Constants.BLOCK_SIZE - lastBlockLen].AsSpan();
+                // All bytes in the padding block are set to the length of the padding block
+                // If this is an empty last block, we still write a padding block for v3+
                 padding.Fill((byte)padding.Length);
                 m_blockBuffer.Append(padding);
 
@@ -336,7 +356,10 @@ internal class EncryptingStreamInternal
             else
             {
                 // v1+ files have the last block size + HMAC at the end of the stream
-                m_stream.WriteByte(lastBlockLen);
+                // except v3+, which uses standard PKCS#7 padding
+                if (m_version < 3)
+                    m_stream.WriteByte(lastBlockLen);
+
                 m_stream.Write(hmac);
                 m_stream.Flush();
             }

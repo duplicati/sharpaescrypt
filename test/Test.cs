@@ -22,7 +22,7 @@ public class Test
 		var failed = 0;
 
 		//Test each supported version
-		for (var v = 0; v <= Constants.MAX_FILE_VERSION; v++)
+		for (var v = Constants.MIN_FILE_VERSION; v <= Constants.MAX_FILE_VERSION; v++)
 		{
 			var opts = new EncryptionOptions() { FileVersion = (byte)v };
 			// Test at boundaries and around the block/keysize margins
@@ -49,7 +49,7 @@ public class Test
 		var failed = 0;
 
 		//Test each supported version
-		for (var v = 0; v <= Constants.MAX_FILE_VERSION; v++)
+		for (var v = Constants.MIN_FILE_VERSION; v <= Constants.MAX_FILE_VERSION; v++)
 		{
 			var opts = new EncryptionOptions() { FileVersion = (byte)v };
 			// Test at boundaries and around the block/keysize margins
@@ -442,30 +442,40 @@ public class Test
 	[TestMethod]
 	public void TestReadHeader()
 	{
+		const byte MIN_VERSION_WITH_EXTENSIONS = 2;
 		//Test each supported version
-		var opts = new EncryptionOptions()
+		foreach (var version in Enumerable.Range(Constants.MIN_FILE_VERSION, Constants.MAX_FILE_VERSION - Constants.MIN_FILE_VERSION + 1))
 		{
-			AdditionalExtensions = [new KeyValuePair<string, byte[]>("t1", [7, 8])],
-			InsertPlaceholder = false,
-			LeaveOpen = true
-		};
+			var encOpts = new EncryptionOptions()
+			{
+				AdditionalExtensions = [new KeyValuePair<string, byte[]>("t1", [7, 8])],
+				InsertPlaceholder = false,
+				LeaveOpen = true,
+				FileVersion = (byte)version
+			};
 
-		var data = new byte[1022];
-		using (var ms = new MemoryStream())
-		{
-			AESCrypt.Encrypt("password", new MemoryStream(data), ms, opts);
-			ms.Position = 0;
-			var header = AESCrypt.ReadExtensions(ms).ToArray();
-			var t1 = header.FirstOrDefault(h => h.Key == "t1");
-			if (t1.Key != "t1" || !t1.Value.SequenceEqual(new byte[] { 7, 8 }))
-				throw new Exception("Extension not found");
+			var decOpts = new DecryptionOptions(LeaveOpen: true, MinVersion: Constants.MIN_FILE_VERSION);
 
-			ms.Position = 0;
-			var targetms = new MemoryStream();
-			AESCrypt.Decrypt("password", ms, targetms, new DecryptionOptions(LeaveOpen: true));
+			var data = new byte[1022];
+			using (var ms = new MemoryStream())
+			{
+				AESCrypt.Encrypt("password", new MemoryStream(data), ms, encOpts);
+				ms.Position = 0;
+				if (version >= MIN_VERSION_WITH_EXTENSIONS)
+				{
+					var header = AESCrypt.ReadExtensions(ms).ToArray();
+					var t1 = header.FirstOrDefault(h => h.Key == "t1");
+					if (t1.Key != "t1" || !t1.Value.SequenceEqual(new byte[] { 7, 8 }))
+						throw new Exception("Extension not found");
+				}
 
-			if (!data.SequenceEqual(targetms.ToArray()))
-				throw new Exception("Data mismatch");
+				ms.Position = 0;
+				using var targetms = new MemoryStream();
+				AESCrypt.Decrypt("password", ms, targetms, decOpts);
+
+				if (!data.SequenceEqual(targetms.ToArray()))
+					throw new Exception("Data mismatch");
+			}
 		}
 	}
 }

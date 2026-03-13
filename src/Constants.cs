@@ -13,8 +13,11 @@ internal static class Constants
     /// <summary>
     /// The maximum supported file version
     /// </summary>
-    internal const byte MAX_FILE_VERSION = 2;
-
+    internal const byte MAX_FILE_VERSION = 3;
+    /// <summary>
+    /// The minimum supported file version 
+    /// </summary>
+    internal const byte MIN_FILE_VERSION = 0;
     /// <summary>
     /// The size of the block unit used by the algorithm in bytes
     /// </summary>
@@ -55,6 +58,15 @@ internal static class Constants
     internal const int KEY_HASH_ITERATIONS = 8192;
 
     /// <summary>
+    /// The minimum number of iterations to use for the KDF
+    /// </summary>
+    internal const int KDF_MIN_ITERATIONS = 10_000;
+    /// <summary>
+    /// The maximum number of iterations to use for the KDF
+    /// </summary>
+    internal const int KDF_MAX_ITERATIONS = 1_200_000;
+
+    /// <summary>
     /// Helper function for setting the `FIRST_MAC_ADDRESS` varible. It retrieves the first MAC address of the system. If no MAC address is found, or one of the system functions throws an exception, a default MAC address is used.
     /// </summary>
     /// <remarks>The default MAC address used is 01:23:45:67:89:ab</remarks>
@@ -62,13 +74,16 @@ internal static class Constants
     private static byte[] GetFirstMacAddress()
     {
         byte[] default_mac = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab];
-        try {
+        try
+        {
             return System.Net.NetworkInformation.NetworkInterface
                     .GetAllNetworkInterfaces()
                     .Select(ni => { try { return ni.GetPhysicalAddress().GetAddressBytes(); } catch { return []; } })
                     .Where(mac => mac.Length > 0 && !mac.All(b => b == 0))
                     .FirstOrDefault(default_mac);
-        } catch {
+        }
+        catch
+        {
             return default_mac;
         }
     }

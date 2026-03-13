@@ -13,7 +13,15 @@ public static class AESCrypt
     /// <summary>
     /// The default file format options to use
     /// </summary>
-    public const byte DEFAULT_FILE_VERSION = 2;
+    public const byte DEFAULT_FILE_VERSION = 3;
+    /// <summary>
+    /// The default minimum file format version to accept when reading
+    /// </summary>
+    public const byte DEFAULT_MINIMUM_READ_VERSION = 2;
+    /// <summary>
+    /// The default KDF iteration count for version 3 files
+    /// </summary>
+    public const int DEFAULT_KDF_ITERATIONS = 300_000;
 
     /// <summary>
     /// Extracts the unencrypted, unverified extensions from the header.

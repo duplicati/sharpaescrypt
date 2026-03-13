@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/SharpAESCrypt.csproj" />
+  <Project Path="test/Unittest.csproj" />
+</Solution>
